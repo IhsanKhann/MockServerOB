@@ -22,6 +22,12 @@ const express = require("express");
 const cors    = require("cors");
 const app     = express();
 
+app.use((req, res, next) => {
+  console.log("\n🟡 MOCK SERVER HIT");
+  console.log("➡️ URL:", req.method, req.url);
+  next();
+});
+
 app.use(express.json());
 app.use(cors());
 
