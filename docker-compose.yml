@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  mockserver:
+    build: .
+    container_name: mockserver
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    depends_on:
+      - mongo
+    volumes:
+      - .:/app
+      - /app/node_modules
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    container_name: mock-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
