@@ -1,11 +1,25 @@
 "use strict";
 /**
- * controllers/shipper.controller.js
- * CRUD + lifecycle for Shippers on Backend B
+ * controllers/shipper.controller.js  — Backend B
+ *
+ * FIXES:
+ *   BUG-2  Circular require removed.
+ *          Was:  require("../controllers/shipper.controller")  ← required itself!
+ *          Now:  require("../service/lifecycle.service")
+ *          Impact: applyLifecycleAction and VALID_ACTIONS were always `undefined`,
+ *          so updateShipperStatus and shipperActionCompat silently crashed on every call.
+ *
+ *   BUG-3  createShipper field name corrected.
+ *          Was:  bankDetails: bankDetails ?? {}
+ *          Now:  paymentInfo: bankDetails ?? {}
+ *          Impact: paymentInfo was never saved on create — the field was
+ *          written to a key that doesn't exist in the Mongoose schema.
  */
 
 const Shipper = require("../models/Shipper");
-const { applyLifecycleAction, VALID_ACTIONS } = require("../controllers/shipper.controller");
+
+// BUG-2 FIX: was require("../controllers/shipper.controller") — circular!
+const { applyLifecycleAction, VALID_ACTIONS } = require("../service/lifecycle.service");
 const { ok, fail } = require("../utils/response");
 
 // ── GET /all_shippers ─────────────────────────────────────────────────────────
@@ -41,20 +55,30 @@ exports.getSingleShipper = async (req, res, next) => {
 // ── POST /  (create shipper) ──────────────────────────────────────────────────
 exports.createShipper = async (req, res, next) => {
   try {
-    const { businessShipperId, name, email, phone, city, type, coverage, rating, bankDetails } = req.body;
+    const {
+      businessShipperId, name, email, phone,
+      city, type, coverage, rating,
+      bankDetails,  // accepted as bankDetails from PHP/callers
+    } = req.body;
 
     if (!businessShipperId || !name)
       return fail(res, "businessShipperId and name are required", 400);
 
     const exists = await Shipper.findOne({ businessShipperId });
-    if (exists) return fail(res, `Shipper with businessShipperId ${businessShipperId} already exists`, 409);
+    if (exists)
+      return fail(res, `Shipper with businessShipperId ${businessShipperId} already exists`, 409);
 
     const shipper = await Shipper.create({
-      businessShipperId, name, email, phone, city,
+      businessShipperId,
+      name,
+      email,
+      phone,
+      city,
       type:        type     ?? "external",
       coverage:    coverage ?? null,
       rating:      rating   ?? 0,
-      bankDetails: bankDetails ?? {},
+      // BUG-3 FIX: schema field is `paymentInfo`, not `bankDetails`
+      paymentInfo: bankDetails ?? {},
     });
 
     console.log(`[SHIPPER] Created shipper id=${businessShipperId} — ${name}`);
@@ -79,7 +103,9 @@ exports.updateShipperStatus = async (req, res, next) => {
     if (!VALID_ACTIONS.has(action))
       return fail(res, `Unknown action "${action}". Valid: ${[...VALID_ACTIONS].join(", ")}`, 400);
 
-    const shipper = await applyLifecycleAction(Shipper, id, action, { reason, note, actorId, durationDays });
+    const shipper = await applyLifecycleAction(Shipper, id, action, {
+      reason, note, actorId, durationDays,
+    });
 
     return ok(res, {
       id:             shipper.businessShipperId,
@@ -108,7 +134,9 @@ exports.shipperActionCompat = async (req, res, next) => {
       return fail(res, `Invalid shipper id: "${shipperId}" — must be a positive integer`, 400);
 
     const { reason, note, actorId, durationDays } = req.body ?? {};
-    const shipper = await applyLifecycleAction(Shipper, id, action, { reason, note, actorId, durationDays });
+    const shipper = await applyLifecycleAction(Shipper, id, action, {
+      reason, note, actorId, durationDays,
+    });
 
     return ok(res, {
       shipperId:      shipper.businessShipperId,
