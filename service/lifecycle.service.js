@@ -1,104 +1,119 @@
 "use strict";
-/**
- * services/lifecycle.service.js
- *
- * Full lifecycle state machine for Sellers and Shippers on Backend B.
- * Handles: approve, reject, suspend, block, terminate
- * Pushes an audit trail entry on every transition.
- */
 
-const VALID_ACTIONS = new Set(["approve", "reject", "suspend", "block", "terminate"]);
+const VALID_ACTIONS = new Set([
+  "approve",
+  "reject",
+  "suspend",
+  "block",
+  "terminate",
+]);
 
-/**
- * Apply a lifecycle action to a Mongoose document.
- *
- * @param {mongoose.Model}  Model       — Seller or Shipper
- * @param {number}          externalId  — businessSellerId / businessShipperId
- * @param {string}          action      — approve | reject | suspend | block | terminate
- * @param {object}          body        — { reason, note, actorId, durationDays }
- * @returns {mongoose.Document}         — updated document
- */
-const applyLifecycleAction = async (Model, externalId, action, body = {}) => {
-  const { reason = null, note = null, actorId = "system", durationDays = null } = body;
+const ACTION_TO_STATUS = {
+  approve: "approved",
+  reject: "rejected",
+  suspend: "suspended",
+  block: "suspended",
+  terminate: "terminated",
+};
 
+const applyLifecycleAction = async (
+  Model,
+  externalId,
+  action,
+  opts = {}
+) => {
   if (!VALID_ACTIONS.has(action)) {
-    const err = new Error(`Unknown action "${action}". Valid: ${[...VALID_ACTIONS].join(", ")}`);
-    err.statusCode = 400;
-    throw err;
+    const e = new Error(
+      `Unknown action "${action}". Valid: ${[
+        ...VALID_ACTIONS,
+      ].join(", ")}`
+    );
+    e.statusCode = 400;
+    throw e;
   }
 
-  // Determine the field used for the ID (differs between models)
-  const idField = Model.modelName === "Seller" ? "businessSellerId" : "businessShipperId";
-  const entity  = await Model.findOne({ [idField]: externalId });
+  const idField =
+    Model.modelName === "Seller"
+      ? "businessSellerId"
+      : "businessShipperId";
 
-  if (!entity) {
-    const err = new Error(`${Model.modelName} with id ${externalId} not found`);
-    err.statusCode = 404;
-    throw err;
-  }
-
-  // ── State machine ────────────────────────────────────────────────────────
-  switch (action) {
-    case "approve":
-      entity.status        = "approved";
-      entity.statusReason  = null;
-      entity.suspendedUntil = null;
-      entity.blockedUntil   = null;
-      break;
-
-    case "reject":
-      entity.status       = "rejected";
-      entity.statusReason = reason ?? "No reason provided";
-      break;
-
-    case "suspend": {
-      entity.status       = "suspended";
-      entity.statusReason = reason ?? null;
-      const days = Number(durationDays);
-      if (days > 0) {
-        const until = new Date();
-        until.setDate(until.getDate() + days);
-        entity.suspendedUntil = until;
-      } else {
-        entity.suspendedUntil = null; // indefinite suspension
-      }
-      break;
-    }
-
-    case "block": {
-      entity.status       = "blocked";
-      entity.statusReason = reason ?? null;
-      const days = Number(durationDays);
-      if (days > 0) {
-        const until = new Date();
-        until.setDate(until.getDate() + days);
-        entity.blockedUntil = until;
-      } else {
-        entity.blockedUntil = null; // indefinite block
-      }
-      break;
-    }
-
-    case "terminate":
-      entity.status       = "terminated";
-      entity.statusReason = reason ?? "Terminated";
-      break;
-  }
-
-  // ── Audit trail ───────────────────────────────────────────────────────────
-  entity.auditTrail.push({
-    action,
-    actorId: actorId ?? "system",
-    reason:  reason  ?? null,
-    note:    note    ?? null,
-    timestamp: new Date(),
+  const entity = await Model.findOne({
+    [idField]: externalId,
   });
 
+  if (!entity) {
+    const e = new Error(
+      `${Model.modelName} ${externalId} not found`
+    );
+    e.statusCode = 404;
+    throw e;
+  }
+
+  const {
+    reason,
+    durationDays,
+  } = opts;
+
+  const newStatus = ACTION_TO_STATUS[action];
+
+  let suspendedUntil = null;
+
+  if (
+    (action === "suspend" || action === "block") &&
+    durationDays > 0
+  ) {
+    suspendedUntil = new Date(
+      Date.now() +
+      durationDays * 24 * 60 * 60 * 1000
+    );
+  }
+
+  entity.status = newStatus;
+
+  entity.statusReason =
+    reason ??
+    (action === "block"
+      ? "blocked"
+      : null);
+
+  entity.suspendedUntil = suspendedUntil;
+
   entity.lastSyncedAt = new Date();
+
   await entity.save();
 
-  console.log(`[LIFECYCLE] ${Model.modelName} id=${externalId} → ${action}d by actorId=${actorId}`);
+  console.log(
+    `[lifecycle.service] ${Model.modelName} ${externalId}: ${newStatus} (${action})`
+  );
+
   return entity;
 };
 
-module.exports = { applyLifecycleAction, VALID_ACTIONS };
+const liftExpiredSuspensions = async (Model) => {
+  const result = await Model.updateMany(
+    {
+      status: "suspended",
+      suspendedUntil: { $lte: new Date() },
+    },
+    {
+      $set: {
+        status: "approved",
+        statusReason: null,
+        suspendedUntil: null,
+        lastSyncedAt: new Date(),
+      },
+    }
+  );
+
+  console.log(
+    `[lifecycle.service] liftExpiredSuspensions (${Model.modelName}): ${result.modifiedCount} lifted`
+  );
+
+  return result.modifiedCount;
+};
+
+module.exports = {
+  applyLifecycleAction,
+  liftExpiredSuspensions,
+  VALID_ACTIONS,
+};
