@@ -18,6 +18,7 @@ const mongoose = require("mongoose");
 const { connectDB }           = require("./config");
 const sellerRoutes            = require("./routes/seller.routes");
 const shipperRoutes           = require("./routes/shipper.routes");
+const buyerRoutes             = require("./routes/buyer.routes");
 const { errorHandler }        = require("./middleware/errorHandler");
 const { requestLogger }       = require("./middleware/requestLogger");
 const { bearerAuth }          = require("./middleware/bearerAuth");
@@ -65,6 +66,7 @@ app.use(bearerAuth);
 // ─── ROUTES ──────────────────────────────────────────────────────────────────
 app.use("/api/v2/seller",  sellerRoutes);
 app.use("/api/v2/shipper", shipperRoutes);
+app.use("/api/v2/buyer",   buyerRoutes);
 
 // ─── 404 CATCH-ALL ───────────────────────────────────────────────────────────
 app.use((req, res) => fail(res, `Route not found: ${req.method} ${req.originalUrl}`, 404));
