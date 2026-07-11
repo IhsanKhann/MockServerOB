@@ -19,9 +19,14 @@ const { connectDB }           = require("./config");
 const sellerRoutes            = require("./routes/seller.routes");
 const shipperRoutes           = require("./routes/shipper.routes");
 const buyerRoutes             = require("./routes/buyer.routes");
+const tier2Routes             = require("./routes/tier2.routes");
+const tier2Poller             = require("./service/tier2Poller.service");
 const { errorHandler }        = require("./middleware/errorHandler");
 const { requestLogger }       = require("./middleware/requestLogger");
 const { bearerAuth }          = require("./middleware/bearerAuth");
+const { latencyInjection, errorInjection, getFaultStatus } = require("./middleware/faultInjection");
+const webhookRoutes           = require("./routes/webhook.routes");
+const stressRoutes            = require("./routes/stress.routes");
 const { fail }                = require("./utils/response");
 
 const app  = express();
@@ -64,9 +69,17 @@ app.get("/api/health", healthHandler);
 app.use(bearerAuth);
 
 // ─── ROUTES ──────────────────────────────────────────────────────────────────
-app.use("/api/v2/seller",  sellerRoutes);
-app.use("/api/v2/shipper", shipperRoutes);
-app.use("/api/v2/buyer",   buyerRoutes);
+// Fault injection (latency + error) applies only to the simulated partner
+// API surface (/api/v2/*), never to the /api/mock/* control/inspection
+// routes below — those must stay reachable to manage a fault run in
+// progress. See middleware/faultInjection.js and docs/SCENARIOS.md.
+app.use("/api/v2/seller",  latencyInjection, errorInjection, sellerRoutes);
+app.use("/api/v2/shipper", latencyInjection, errorInjection, shipperRoutes);
+app.use("/api/v2/buyer",   latencyInjection, errorInjection, buyerRoutes);
+app.use("/api/mock/tier2",   tier2Routes);
+app.use("/api/mock/webhook", webhookRoutes);
+app.use("/api/mock/stress",  stressRoutes);
+app.get("/api/mock/fault/status", getFaultStatus);
 
 // ─── 404 CATCH-ALL ───────────────────────────────────────────────────────────
 app.use((req, res) => fail(res, `Route not found: ${req.method} ${req.originalUrl}`, 404));
@@ -84,6 +97,14 @@ app.use(errorHandler);
     console.log(`[BOOT] Health checks : GET /health  |  GET /api/health`);
     console.log(`[BOOT] Auth model    : Authorization: Bearer <PHP_PARTNER_API_KEY>`);
     console.log(`[BOOT] CORS origin   : ${BACKEND_ORIGIN}`);
+    console.log(`[BOOT] Tier-2 poll   : GET /api/mock/tier2/status (enable via TIER2_POLL_ENABLED=true)`);
+    console.log(`[BOOT] Fault inject  : GET /api/mock/fault/status (enable via FAULT_LATENCY_ENABLED/FAULT_ERROR_ENABLED)`);
+    console.log(`[BOOT] Webhook sim   : POST /api/mock/webhook/fire (see docs/SCENARIOS.md)`);
+    console.log(`[BOOT] Stress seed   : POST /api/mock/stress/seed`);
     console.log("─────────────────────────────────────────────────────────────");
   });
+
+  if (process.env.TIER2_POLL_ENABLED === "true") {
+    tier2Poller.start();
+  }
 })();
